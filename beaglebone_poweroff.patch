@@ -1,0 +1,122 @@
+Index: git/arch/arm/mach-omap2/board-am335xevm.c
+===================================================================
+--- git.orig/arch/arm/mach-omap2/board-am335xevm.c	2012-06-19 11:03:45.147257386 -0700
++++ git/arch/arm/mach-omap2/board-am335xevm.c	2012-06-28 11:17:47.872704262 -0700
+@@ -405,6 +405,7 @@
+ #define	CPLD_DEVICE_REV	0x0C /* Revision of the CPLD code */
+ #define	CPLD_CFG_REG	0x10 /* Configuration Register */
+ 
++static struct i2c_client *tps65217_client;
+ static struct i2c_client *cpld_client;
+ static u32 am335x_evm_id;
+ static struct omap_board_config_kernel am335x_evm_config[] __initdata = {
+@@ -2944,7 +2945,6 @@
+ static void tps65217_init(int evm_id, int profile)
+ {
+ 	struct i2c_adapter *adapter;
+-	struct i2c_client *client;
+ 	struct device *mpu_dev;
+ 	struct tps65217 *tps;
+ 	unsigned int val;
+@@ -2961,13 +2961,13 @@
+ 		return;
+ 	}
+ 
+-	client = i2c_new_device(adapter, tps65217_i2c_boardinfo);
+-	if (!client)
++	tps65217_client = i2c_new_device(adapter, tps65217_i2c_boardinfo);
++	if (!tps65217_client)
+ 		pr_err("failed to register tps65217 to i2c1\n");
+ 
+ 	i2c_put_adapter(adapter);
+ 
+-	tps = (struct tps65217 *)i2c_get_clientdata(client);
++	tps = (struct tps65217 *)i2c_get_clientdata(tps65217_client);
+ 
+ 	ret = tps65217_reg_read(tps, TPS65217_REG_STATUS, &val);
+ 	if (ret) {
+@@ -3265,6 +3265,77 @@
+ 	am33xx_evmid_fillup(BEAGLE_BONE_OLD);
+ }
+ 
++static void tps65217_set_off_bit(void)
++{
++	//tps65217_client;
++	struct tps65217 *tps;
++	int ret;
++
++	tps = (struct tps65217 *)i2c_get_clientdata(tps65217_client);
++
++	/* tps65217_set_bits(tps, TPS65217_REG_STATUS, TPS65217_STATUS_OFF, TPS65217_STATUS_OFF, TPS65217_PROTECT_NONE); */
++	ret = tps65217_reg_write(tps, TPS65217_REG_STATUS, TPS65217_STATUS_OFF, TPS65217_PROTECT_NONE);
++	if (ret)
++		pr_err("failed to write tps65217 status reg\n");
++
++}
++
++static void beaglebone_tps65217_poweroff(void)
++{
++	void __iomem *base;
++	long seconds;
++	long minutes;
++	
++	tps65217_set_off_bit();
++	
++	base = ioremap(AM33XX_RTC_BASE, SZ_4K);
++
++	if (WARN_ON(!base))
++		return; /*-ENOMEM;*/
++
++	/* Enable pwr_enable_en */
++	writel(0x00010000, base + 0x98);
++	/* Enable ALARM2 INT */
++	writel(0x00000010, base + 0x48);
++	/* Copy over RTC time registers */
++	
++	/*writel(readl(base+0x04), base + 0x84);*/
++	writel(readl(base+0x08), base + 0x88);
++	writel(readl(base+0x0C), base + 0x8C);
++	writel(readl(base+0x10), base + 0x90);
++	writel(readl(base+0x14), base + 0x94);
++	/* Copy over seconds and hope they arent a multiple of 10 */
++	seconds = readl(base+0x00);
++	minutes = readl(base+0x04);
++	printk(KERN_EMERG "Seconds = %x\n", seconds);
++	seconds++;
++	if ((seconds & 0xF) == 10)
++	{
++		seconds -= 10;
++		seconds += 0x10;
++		if ((seconds & 0xFF) == 0x60)
++		{
++			seconds = 0;
++			minutes++;
++			if ((minutes & 0xF) == 10)
++			{
++				minutes -= 10;
++				minutes += 0x10;
++			}
++		}
++	}
++	writel(seconds, base + 0x80);
++	writel(minutes, base + 0x84);
++
++	iounmap(base);
++	
++	printk(KERN_EMERG "Seconds ALARM2 after = %x\n", seconds);
++	printk(KERN_EMERG "Seconds (race check) = %x\n", readl(base+0x00));
++	
++	printk(KERN_EMERG "This should take no more than a second2\n");
++	while(1);
++}
++
+ /* BeagleBone after Rev A3 */
+ static void setup_beaglebone(void)
+ {
+@@ -3286,6 +3357,8 @@
+ 	 *this may effect power management in the future
+ 	 */
+ 	register_all_pwms();
++	
++	pm_power_off = beaglebone_tps65217_poweroff;
+ }
